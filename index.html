@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VORONKOV V13.22 | ATTRACTOR SHIELD (DEEP ECHO)</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Consolas', monospace; color: #00f2ff; }
+        #ui-panel { 
+            position: absolute; left: 0; top: 0; bottom: 0; width: 320px; 
+            background: rgba(0,5,15,0.95); border-right: 1px solid #00f2ff44; 
+            padding: 20px; z-index: 1000; display: flex; flex-direction: column; 
+            backdrop-filter: blur(15px); box-shadow: 10px 0 30px rgba(0,0,0,0.8);
+        }
+        .header { font-size: 22px; font-weight: 900; margin-bottom: 15px; border-bottom: 2px solid #00f2ff; padding-bottom: 5px; }
+        .label { font-size: 8px; color: #555; text-transform: uppercase; margin: 10px 0 4px; letter-spacing: 1px; }
+        textarea { 
+            width: 100%; height: 80px; background: #020508; border: 1px solid #00f2ff33; 
+            color: #00ff88; font-family: inherit; padding: 10px; box-sizing: border-box; 
+            outline: none; margin-bottom: 10px; resize: none; font-size: 11px;
+        }
+        .btn { 
+            width: 100%; background: rgba(0,242,255,0.05); border: 1px solid #00f2ff44; 
+            color: #00f2ff; padding: 8px; cursor: pointer; font-weight: bold; 
+            text-transform: uppercase; margin-bottom: 4px; font-size: 10px; transition: 0.1s;
+        }
+        .btn:hover { background: rgba(0,242,255,0.2); border-color: #00f2ff; }
+        .btn.active { background: #00f2ff; color: #000; }
+        .btn-exec { border-color: #00ff88; color: #00ff88; font-size: 12px; margin-top: 5px; }
+        #verdict-box { 
+            background: rgba(255,255,255,0.03); border: 1px solid #00f2ff33; 
+            padding: 15px; border-radius: 4px; margin-top: 10px;
+        }
+        #prediction-val { font-size: 28px; font-weight: 900; color: #fff; }
+        #accuracy-percent { font-size: 14px; font-weight: bold; margin-left: 8px; }
+        #verdict-text { font-size: 11px; margin-top: 4px; font-weight: bold; }
+        #terminal { 
+            position: absolute; right: 0; top: 0; bottom: 0; width: 300px; 
+            background: rgba(0,0,0,0.8); border-left: 1px solid #ff00ff22; 
+            padding: 15px; font-size: 9px; color: #00ff88; overflow: hidden; pointer-events: none;
+        }
+        .log-line { margin-bottom: 2px; opacity: 0.6; border-bottom: 1px solid #ffffff05; }
+    </style>
+</head>
+<body>
+
+<div id="ui-panel">
+    <div class="header">VORONKOV V13.22</div>
+    <div class="label">Data Stream (Format: val:weight or val)</div>
+    <textarea id="data-input" placeholder="e.g. 2:3.5, 5:4.8, 1:2.5"></textarea>
+    <button class="btn btn-exec" onclick="runAll()">SYNCHRONIZE CORE</button>
+
+    <div class="label">Topology</div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+        <button class="btn mode-btn active" onclick="setMode('DNA', this)">DNA</button>
+        <button class="btn mode-btn" onclick="setMode('NEURAL', this)">NEURAL</button>
+        <button class="btn mode-btn" onclick="setMode('QUBIT', this)">QUBIT</button>
+        <button class="btn mode-btn" onclick="setMode('CHAOS', this)">CHAOS</button>
+        <button class="btn mode-btn" onclick="setMode('BIO', this)">BIO</button>
+        <button class="btn mode-btn" onclick="setMode('VOID', this)">VOID</button>
+    </div>
+
+    <div class="label">Engine Status</div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+        <button id="recurBtn" class="btn" onclick="toggleRecursion()">Loop: OFF</button>
+        <button id="trailsBtn" class="btn" onclick="toggleTrails()">Trails: OFF</button>
+        <button id="learnBtn" class="btn" onclick="toggleAutoLearning()" style="grid-column: span 2; border-color: #ff00ff; color: #ff00ff;">AUTO-LEARN: OFF</button>
+    </div>
+
+    <div id="verdict-box">
+        <div class="label" style="color: #00f2ff; margin:0;">Singularity Output</div>
+        <span id="prediction-val">0.000</span>
+        <span id="accuracy-percent">0%</span>
+        <div id="verdict-text">STANDBY</div>
+        <div id="eng-description" style="font-size: 9px; color: #666; margin-top: 8px; border-left: 2px solid #00f2ff; padding-left: 5px;"></div>
+    </div>
+</div>
+
+<div id="terminal"></div>
+
+<script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+
+    const CONFIG = { 
+        count: 90000, dt: 0.0025, 
+        sigma: 10, rho: 13, beta: 8/3,
+        vortex: 4, pull: 0.022, bhMass: 1.0,
+        trails: false, recursive: false, loopDelay: 200,
+        autoLearning: false, tolerance: 0.04,
+        activeMode: 'DNA',
+        modeStabilityMod: 1.0,
+        modeEntropyMod: 1.0
+    };
+    
+    let isResonant = false;
+    let camRotationX = 0, camRotationY = 0, camDistance = 250, isDragging = false;
+    let lastPred = null;
+    let neuralEcho = [];
+    let EmergentMemory = JSON.parse(localStorage.getItem('VORONKOV_MEMORY')) || {};
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 3000);
+    const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const bhGroup = new THREE.Group();
+    const bhCore = new THREE.Mesh(new THREE.SphereGeometry(6, 32, 32), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(15, 0.2, 16, 100), new THREE.MeshBasicMaterial({ color: 0x00f2ff, transparent: true, opacity: 0.3 }));
+    ring.rotation.x = Math.PI / 2;
+    bhGroup.add(bhCore, ring);
+    scene.add(bhGroup);
+
+    const states = new Float32Array(CONFIG.count * 3);
+    const pos = new Float32Array(CONFIG.count * 3);
+    const col = new Float32Array(CONFIG.count * 3);
+    const particleType = new Int8Array(CONFIG.count); 
+
+    function rebirth(i) {
+        const i3 = i * 3;
+        const r = 100 + Math.random() * 200;
+        const a = Math.random() * Math.PI * 2;
+        states[i3] = Math.cos(a) * r;
+        states[i3+1] = (Math.random()-0.5) * 100;
+        states[i3+2] = Math.sin(a) * r;
+        particleType[i] = 0;
+    }
+
+    for(let i=0; i<CONFIG.count; i++) rebirth(i);
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const points = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.5, vertexColors: true, blending: THREE.AdditiveBlending }));
+    scene.add(points);
+
+    window.addEventListener('mousedown', () => isDragging = true);
+    window.addEventListener('mouseup', () => isDragging = false);
+    window.addEventListener('mousemove', (e) => {
+        if(isDragging) {
+            camRotationY -= e.movementX * 0.005;
+            camRotationX -= e.movementY * 0.005;
+        }
+    });
+    window.addEventListener('wheel', (e) => camDistance = Math.max(50, Math.min(800, camDistance + e.deltaY * 0.2)));
+
+    window.log = (msg, color = "#00ff88") => {
+        const term = document.getElementById('terminal');
+        if (!term) return;
+        const line = document.createElement('div');
+        line.className = 'log-line'; line.style.color = color;
+        line.innerHTML = `> ${msg}`;
+        term.prepend(line);
+        if(term.childNodes.length > 25) term.lastChild.remove();
+    };
+
+    window.toggleRecursion = () => {
+        CONFIG.recursive = !CONFIG.recursive;
+        document.getElementById('recurBtn').classList.toggle('active');
+        document.getElementById('recurBtn').innerText = `Loop: ${CONFIG.recursive ? 'ON' : 'OFF'}`;
+        if(CONFIG.recursive) startNeuralLoop();
+    };
+
+    window.toggleAutoLearning = () => {
+        CONFIG.autoLearning = !CONFIG.autoLearning;
+        const btn = document.getElementById('learnBtn');
+        btn.classList.toggle('active');
+        btn.innerText = `AUTO-LEARN: ${CONFIG.autoLearning ? 'ON' : 'OFF'}`;
+        window.log(`COGNITIVE MODE: ${CONFIG.autoLearning ? 'ACTIVE' : 'IDLE'}`, "#ff00ff");
+    };
+
+    function startNeuralLoop() {
+        if(!CONFIG.recursive) return;
+        if(lastPred !== null) {
+            neuralEcho.push(lastPred);
+            if(neuralEcho.length > 10) neuralEcho.shift();
+            window.runAll(true); 
+        }
+        setTimeout(startNeuralLoop, CONFIG.loopDelay);
+    }
+
+    window.setMode = (mode, btn) => {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        CONFIG.activeMode = mode;
+        
+        CONFIG.modeStabilityMod = 1.0;
+        CONFIG.modeEntropyMod = 1.0;
+
+        if(mode === 'DNA') { CONFIG.sigma = 10; CONFIG.rho = 13; CONFIG.vortex = 4; CONFIG.pull = 0.022; }
+        if(mode === 'CHAOS') { CONFIG.sigma = 10; CONFIG.rho = 48; CONFIG.vortex = 1; CONFIG.pull = 0.01; CONFIG.modeStabilityMod = 1.2; }
+        if(mode === 'VOID') { 
+            CONFIG.sigma = 20; CONFIG.rho = 10; CONFIG.vortex = 2; CONFIG.pull = 0.1; 
+            CONFIG.modeEntropyMod = 1.4;
+            CONFIG.modeStabilityMod = 0.8;
+        }
+        if(mode === 'QUBIT') { CONFIG.sigma = 5; CONFIG.rho = 8; CONFIG.vortex = 8; CONFIG.pull = 0.03; CONFIG.modeStabilityMod = 0.5; }
+        if(mode === 'NEURAL') { 
+            CONFIG.sigma = 10; CONFIG.rho = 28; CONFIG.vortex = 2; CONFIG.pull = 0.02; 
+            CONFIG.modeEntropyMod = 0.7;
+            CONFIG.modeStabilityMod = 1.2;
+        }
+        if(mode === 'BIO') { CONFIG.sigma = 8; CONFIG.rho = 20; CONFIG.vortex = 3; CONFIG.pull = 0.025; }
+        
+        window.log(`MODE: ${mode} (STB:${CONFIG.modeStabilityMod} ENT:${CONFIG.modeEntropyMod})`);
+        if(document.getElementById('data-input').value.length > 2) window.runAll();
+    };
+
+    window.toggleTrails = () => {
+        CONFIG.trails = !CONFIG.trails;
+        document.getElementById('trailsBtn').classList.toggle('active');
+        document.getElementById('trailsBtn').innerText = `Trails: ${CONFIG.trails ? 'ON' : 'OFF'}`;
+    };
+
+    function perceiveContext(syncVal) {
+        if (!CONFIG.autoLearning || !isResonant) return;
+        const fingerprint = { s: CONFIG.sigma, r: CONFIG.rho, sync: syncVal };
+        let match = null;
+        for (let label in EmergentMemory) {
+            const mem = EmergentMemory[label].finger;
+            const delta = Math.abs(fingerprint.sync - mem.sync) + Math.abs(fingerprint.r - mem.r)/50;
+            if (delta < CONFIG.tolerance) { match = label; break; }
+        }
+        if (match) {
+            window.log(`RECOGNIZED: "${match}"`, "#00f2ff");
+        } else {
+            const id = "ID_" + Math.random().toString(36).substr(2, 4).toUpperCase();
+            EmergentMemory[id] = { finger: fingerprint, time: Date.now() };
+            localStorage.setItem('VORONKOV_MEMORY', JSON.stringify(EmergentMemory));
+            window.log(`NEW SENSE: ${id}`, "#ff00ff");
+        }
+    }
+
+    window.runAll = (fromLoop = false) => {
+        const raw = document.getElementById('data-input').value;
+        const pairs = raw.split(',').map(p => p.trim().split(':').map(Number));
+        let nums = pairs.map(p => p[0]).filter(n => !isNaN(n));
+        let weights = pairs.map(p => p[1] !== undefined ? p[1] : p[0]).filter(n => !isNaN(n));
+
+        if(fromLoop && neuralEcho.length > 0) nums = [...nums, ...neuralEcho];
+        if(nums.length < 3) return;
+
+        const diffs = nums.slice(1).map((n, i) => Math.abs(n - nums[i]));
+        const mean = Math.abs(nums.reduce((a, b) => a + b, 0) / nums.length) + 1;
+        const rmsDiff = Math.sqrt(diffs.reduce((a, b) => a + b * b, 0) / diffs.length);
+
+        let attractorStability = 0;
+        let entropyLeak = 0; 
+
+        for(let i = 0; i < diffs.length; i++) {
+            const dV = nums[i+1] - nums[i];
+            const dW = weights[i+1] - weights[i];
+            const acceleration = (nums[i+1] / (nums[i] || 1));
+            
+            if (((dV >= 0 && dW >= 0) || (dV <= 0 && dW <= 0))) {
+                attractorStability += (1 / diffs.length) * CONFIG.modeStabilityMod;
+                // Снижаем накопленную энтропию при логичном поведении
+                entropyLeak *= 0.8;
+            }
+
+            // Инерционное накопление энтропии (Stage 6 Logic)
+            if (dV < 0 && dW > 0) entropyLeak = (entropyLeak * 0.5) + (0.4 * CONFIG.modeEntropyMod); 
+            if (acceleration > 1.3 && dW <= 0) entropyLeak = (entropyLeak * 0.5) + (0.5 * CONFIG.modeEntropyMod); 
+            if (dV > 0 && dW < 0) entropyLeak = (entropyLeak * 0.5) + (0.8 * CONFIG.modeEntropyMod);
+        }
+
+        let deepEchoScore = 0;
+        if (nums.length > 4) {
+            const tail = diffs.slice(-2);
+            for (let i = 0; i < diffs.length - 3; i++) {
+                const slice = diffs.slice(i, i + 2);
+                const dist = Math.abs(slice[0] - tail[0]) + Math.abs(slice[1] - tail[1]);
+                if (dist < rmsDiff * 0.6) deepEchoScore += 0.3;
+            }
+        }
+
+        let fractalSync = (diffs.filter(d => d <= rmsDiff * 1.5).length / diffs.length);
+        fractalSync = (fractalSync * 0.4) + (attractorStability * 0.4) + (deepEchoScore * 0.2);
+        
+        fractalSync = Math.max(0.0, fractalSync - (entropyLeak * 0.6));
+        fractalSync = Math.min(1.0, fractalSync);
+
+        const last = nums[nums.length-1];
+        const trend = last - (nums[nums.length-2] || last);
+        
+        isResonant = fractalSync >= 0.55; 
+        CONFIG.bhMass = isResonant ? (1.0 + fractalSync * 3.5) : Math.max(0.1, 0.4 - entropyLeak);
+        
+        const pred = isResonant ? last + (trend * (0.5 + attractorStability * 0.5)) : last + (trend * Math.random());
+        lastPred = pred;
+
+        document.getElementById('prediction-val').innerText = pred.toFixed(3);
+        const accEl = document.getElementById('accuracy-percent');
+        accEl.innerText = `${(fractalSync * 100).toFixed(1)}%`;
+        accEl.style.color = isResonant ? "#00ff88" : "#ff4400";
+        
+        const vText = document.getElementById('verdict-text');
+        if (entropyLeak > 0.8) {
+            vText.innerText = "SYSTEM CRITICAL ENTROPY";
+            vText.style.color = "#ff0000";
+        } else {
+            vText.innerText = isResonant ? "CORE RESONANCE" : "DISSONANCE";
+            vText.style.color = isResonant ? "#00f2ff" : "#ff4400";
+        }
+
+        document.getElementById('eng-description').innerHTML = 
+            `SYNC: ${fractalSync.toFixed(2)} | STB: ${attractorStability.toFixed(2)} | ENT: ${entropyLeak.toFixed(2)}`;
+        
+        if(!fromLoop) {
+            if(isResonant) window.log(`CORE LOCKED: ${(fractalSync*100).toFixed(0)}%`, "#00f2ff");
+            if(entropyLeak > 0.6) window.log(`CRITICAL ANOMALY: ${entropyLeak.toFixed(2)}`, "#ff0000");
+            window.log(`EXEC: PRED ${pred.toFixed(2)}`);
+            perceiveContext(fractalSync);
+        }
+        for(let i=0; i<CONFIG.count; i++) if(Math.random() > 0.7) particleType[i] = 1;
+    };
+
+    function animate() {
+        requestAnimationFrame(animate);
+        camera.position.x = camDistance * Math.sin(camRotationY) * Math.cos(camRotationX);
+        camera.position.z = camDistance * Math.cos(camRotationY) * Math.cos(camRotationX);
+        camera.position.y = camDistance * Math.sin(camRotationX);
+        camera.lookAt(0, 0, 0);
+        bhGroup.scale.set(CONFIG.bhMass, CONFIG.bhMass, CONFIG.bhMass);
+        bhGroup.rotation.y += 0.01;
+        const p = geo.attributes.position.array;
+        const c = geo.attributes.color.array;
+        for(let i=0; i<CONFIG.count; i++) {
+            const i3 = i * 3;
+            let x = states[i3], y = states[i3+1], z = states[i3+2];
+            if(particleType[i] === 1) { 
+                x *= 0.94; y *= 0.94; z *= 0.94;
+                if(Math.abs(x) < 2) particleType[i] = 2; 
+            } else if(particleType[i] === 2) { 
+                const ang = Math.random() * Math.PI * 2;
+                const dist = 15 * CONFIG.bhMass + Math.random() * 50;
+                x = Math.cos(ang) * dist; y = (Math.random()-0.5)*20; z = Math.sin(ang) * dist;
+                particleType[i] = 0;
+            } else { 
+                let dx = CONFIG.sigma * (y - x);
+                let dy = x * (CONFIG.rho - z) - y;
+                let dz = x * y - CONFIG.beta * z;
+                const d2 = Math.sqrt(x*x + z*z) || 1;
+                const spiralX = (z / d2) * CONFIG.vortex;
+                const spiralZ = (-x / d2) * CONFIG.vortex;
+                x += (dx * 0.1 + spiralX + (-x * CONFIG.pull)) * CONFIG.dt;
+                y += (dy * 0.1) * CONFIG.dt;
+                z += (dz * 0.1 + spiralZ + (-z * CONFIG.pull)) * CONFIG.dt;
+            }
+            states[i3] = x; states[i3+1] = y; states[i3+2] = z;
+            p[i3] = x; p[i3+1] = y; p[i3+2] = z;
+            const speed = Math.abs(x+y+z) * 0.005;
+            if(isResonant) {
+                c[i3] = 0; c[i3+1] = 0.5 + speed; c[i3+2] = 0.9;
+            } else {
+                c[i3] = 0.8 + speed; c[i3+1] = 0.2; c[i3+2] = 0.1;
+            }
+        }
+        geo.attributes.position.needsUpdate = true;
+        geo.attributes.color.needsUpdate = true;
+        renderer.autoClear = !CONFIG.trails;
+        renderer.render(scene, camera);
+    }
+    animate();
+</script>
+</body>
+</html>
